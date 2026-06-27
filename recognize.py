@@ -4,9 +4,11 @@ import sqlite3
 import numpy as np
 from pathlib import Path
 from datetime import datetime, date
-from db import init_db
+from db import init_db, add_pending_face
 
 DB_PATH = "attendance.db"
+UNKNOWN_DIR = Path("unknown_faces")
+UNKNOWN_DIR.mkdir(exist_ok=True)
 init_db()
 
 # Load all registered faces
@@ -45,6 +47,24 @@ def mark_attendance(user_id):
         print(f"[INFO] Marked {user_id} present at {now}")
     conn.close()
 
+# Encodings of unknown faces already captured this session, so the same
+# stranger doesn't get a new snapshot saved on every single frame.
+captured_unknown_encodings = []
+
+def already_captured(encoding, tolerance=0.5):
+    if not captured_unknown_encodings:
+        return False
+    distances = face_recognition.face_distance(captured_unknown_encodings, encoding)
+    return bool(np.any(distances <= tolerance))
+
+def capture_unknown_face(frame, top, right, bottom, left, encoding):
+    face_img = frame[top:bottom, left:right]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    img_path = UNKNOWN_DIR / f"unknown_{timestamp}.jpg"
+    cv2.imwrite(str(img_path), face_img)
+    add_pending_face(str(img_path), datetime.now().isoformat())
+    captured_unknown_encodings.append(encoding)
+
 while True:
     ret, frame = cam.read()
     if not ret:
@@ -63,6 +83,8 @@ while True:
             name = known_names[match_idx]
             user_id = known_ids[match_idx]
             mark_attendance(user_id)
+        elif not already_captured(encoding):
+            capture_unknown_face(frame, top, right, bottom, left, encoding)
 
         # Draw rectangle
         color = (0, 255, 0) if name != "Unknown" else (0, 0, 255)
